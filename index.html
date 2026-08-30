@@ -70,6 +70,17 @@
     <p><a class="link" id="forgotPasswordLink">忘記密碼 / 第一次登入請寄送設定密碼信</a></p>
   </section>
 
+  <!-- Only shown after arriving here via the password-reset email's link
+       (Supabase fires a PASSWORD_RECOVERY auth event once it parses the
+       token in the URL) -- a real session already exists at this point,
+       just not a password yet. -->
+  <section id="recoverySection" class="card hidden">
+    <div id="recoveryError" class="error hidden"></div>
+    <label for="newPasswordInput">設定新密碼</label>
+    <input id="newPasswordInput" type="password" autocomplete="new-password">
+    <button class="primary" id="setPasswordBtn">設定密碼</button>
+  </section>
+
   <section id="appSection" class="hidden">
     <div class="tabs">
       <button data-tab="account" class="active">查詢帳號</button>
@@ -110,8 +121,33 @@ const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_dAnaSJVQWH_W44ARy3FW5A_mAgtuqOJ
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 
 const loginSection = document.getElementById('loginSection');
+const recoverySection = document.getElementById('recoverySection');
 const appSection = document.getElementById('appSection');
 const signOutBtn = document.getElementById('signOutBtn');
+
+// Base URL of this page itself, stripped of any query/hash -- passed as
+// resetPasswordForEmail's redirectTo so the reset email's link comes back
+// here instead of Supabase's own default Site URL (a placeholder
+// http://localhost:3000 that was never changed, since this project's only
+// other consumer is the mobile app, not a website). Must also be added to
+// this Supabase project's Authentication -> URL Configuration -> Redirect
+// URLs allow-list, or Supabase silently ignores it and falls back to the
+// default anyway.
+const SELF_URL = window.location.origin + window.location.pathname;
+
+// True once we've landed here via the recovery link -- distinguishes "just
+// logged in normally" from "here to set a password" in onAuthStateChange
+// below, since both produce a SIGNED_IN-ish session.
+let isPasswordRecovery = false;
+
+supabase.auth.onAuthStateChange((event) => {
+  if (event === 'PASSWORD_RECOVERY') {
+    isPasswordRecovery = true;
+    hide(loginSection);
+    hide(appSection);
+    show(recoverySection);
+  }
+});
 
 function show(el) { el.classList.remove('hidden'); }
 function hide(el) { el.classList.add('hidden'); }
@@ -167,11 +203,31 @@ document.getElementById('forgotPasswordLink').addEventListener('click', async ()
     show(errorEl);
     return;
   }
-  const { error } = await supabase.auth.resetPasswordForEmail(email);
+  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: SELF_URL });
   hide(errorEl);
   errorEl.textContent = error ? error.message : '已寄出設定密碼信，請至信箱查收。';
   errorEl.style.color = error ? '' : '#3f6b4a';
   show(errorEl);
+});
+
+document.getElementById('setPasswordBtn').addEventListener('click', async () => {
+  const password = document.getElementById('newPasswordInput').value;
+  const errorEl = document.getElementById('recoveryError');
+  hide(errorEl);
+  if (!password || password.length < 6) {
+    errorEl.textContent = '密碼至少需要 6 個字元。';
+    show(errorEl);
+    return;
+  }
+  const { error } = await supabase.auth.updateUser({ password });
+  if (error) {
+    errorEl.textContent = error.message;
+    show(errorEl);
+    return;
+  }
+  isPasswordRecovery = false;
+  hide(recoverySection);
+  await refreshAuthUi();
 });
 
 signOutBtn.addEventListener('click', async () => {
@@ -180,6 +236,12 @@ signOutBtn.addEventListener('click', async () => {
 });
 
 async function refreshAuthUi() {
+  if (isPasswordRecovery) {
+    hide(loginSection);
+    hide(appSection);
+    show(recoverySection);
+    return;
+  }
   const { data: { session } } = await supabase.auth.getSession();
   if (session) {
     hide(loginSection);
