@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>水月後台</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Microsoft JhengHei", sans-serif;
+    background: #f3efe9;
+    color: #2a2622;
+  }
+  header {
+    padding: 16px 24px;
+    background: #2a2622;
+    color: #f3efe9;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header button { background: none; border: 1px solid #f3efe9; color: #f3efe9; border-radius: 4px; padding: 6px 12px; cursor: pointer; }
+  main { max-width: 720px; margin: 0 auto; padding: 24px; }
+  .hidden { display: none !important; }
+  .card { background: #fff; border-radius: 4px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  label { display: block; font-size: 13px; margin-bottom: 6px; color: #57524b; }
+  input {
+    width: 100%; padding: 10px 12px; margin-bottom: 16px; border: 1px solid #d6cac2;
+    border-radius: 4px; font-size: 15px;
+  }
+  button.primary {
+    background: #3f6b4a; color: #fff; border: none; border-radius: 4px;
+    padding: 10px 16px; font-size: 15px; cursor: pointer;
+  }
+  button.primary:disabled { opacity: 0.5; cursor: default; }
+  a.link { color: #3f6b4a; font-size: 13px; cursor: pointer; text-decoration: underline; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+  .tabs button {
+    background: none; border: 1px solid #d6cac2; border-radius: 4px; padding: 8px 16px;
+    cursor: pointer; font-size: 14px; color: #57524b;
+  }
+  .tabs button.active { background: #2a2622; color: #f3efe9; border-color: #2a2622; }
+  .error { color: #b3423b; font-size: 13px; margin-bottom: 12px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 13px; }
+  th, td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; vertical-align: top; }
+  th { color: #57524b; font-weight: 600; }
+  .muted { color: #999; }
+  .search-row { display: flex; gap: 8px; }
+  .search-row input { margin-bottom: 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>水月後台</h1>
+  <button id="signOutBtn" class="hidden">登出</button>
+</header>
+
+<main>
+  <section id="loginSection" class="card">
+    <div id="loginError" class="error hidden"></div>
+    <label for="emailInput">帳號 email</label>
+    <input id="emailInput" type="email" autocomplete="username">
+    <label for="passwordInput">密碼</label>
+    <input id="passwordInput" type="password" autocomplete="current-password">
+    <button class="primary" id="loginBtn">登入</button>
+    <p><a class="link" id="forgotPasswordLink">忘記密碼 / 第一次登入請寄送設定密碼信</a></p>
+  </section>
+
+  <section id="appSection" class="hidden">
+    <div class="tabs">
+      <button data-tab="account" class="active">查詢帳號</button>
+      <button data-tab="bracelet">查詢手環</button>
+      <button data-tab="log">操作紀錄</button>
+    </div>
+
+    <div id="tab-account" class="card">
+      <div class="search-row">
+        <input id="accountEmailInput" type="email" placeholder="使用者 email">
+        <button class="primary" id="accountSearchBtn">查詢</button>
+      </div>
+      <div id="accountError" class="error hidden"></div>
+      <div id="accountResult"></div>
+    </div>
+
+    <div id="tab-bracelet" class="card hidden">
+      <div class="search-row">
+        <input id="braceletCodeInput" type="text" placeholder="兌換碼">
+        <button class="primary" id="braceletSearchBtn">查詢</button>
+      </div>
+      <div id="braceletError" class="error hidden"></div>
+      <div id="braceletResult"></div>
+    </div>
+
+    <div id="tab-log" class="card hidden">
+      <div id="logResult"></div>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+const SUPABASE_URL = 'https://fefnrifovthrlykjdtpd.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_dAnaSJVQWH_W44ARy3FW5A_mAgtuqOJ';
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+
+const loginSection = document.getElementById('loginSection');
+const appSection = document.getElementById('appSection');
+const signOutBtn = document.getElementById('signOutBtn');
+
+function show(el) { el.classList.remove('hidden'); }
+function hide(el) { el.classList.add('hidden'); }
+
+function fmtTime(iso) {
+  if (!iso) return '<span class="muted">-</span>';
+  return new Date(iso).toLocaleString('zh-TW', { hour12: false });
+}
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function callAdminFunction(name, body) {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new Error('尚未登入');
+  const res = await fetch(SUPABASE_URL + '/functions/v1/' + name, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + session.access_token,
+      'apiKey': SUPABASE_PUBLISHABLE_KEY,
+    },
+    body: JSON.stringify(body ?? {}),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(json.message || json.error || ('請求失敗 (' + res.status + ')'));
+  }
+  return json;
+}
+
+// ---- Auth ----
+
+document.getElementById('loginBtn').addEventListener('click', async () => {
+  const email = document.getElementById('emailInput').value.trim();
+  const password = document.getElementById('passwordInput').value;
+  const errorEl = document.getElementById('loginError');
+  hide(errorEl);
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) {
+    errorEl.textContent = error.message;
+    show(errorEl);
+    return;
+  }
+  await refreshAuthUi();
+});
+
+document.getElementById('forgotPasswordLink').addEventListener('click', async () => {
+  const email = document.getElementById('emailInput').value.trim();
+  const errorEl = document.getElementById('loginError');
+  if (!email) {
+    errorEl.textContent = '請先輸入 email。';
+    show(errorEl);
+    return;
+  }
+  const { error } = await supabase.auth.resetPasswordForEmail(email);
+  hide(errorEl);
+  errorEl.textContent = error ? error.message : '已寄出設定密碼信，請至信箱查收。';
+  errorEl.style.color = error ? '' : '#3f6b4a';
+  show(errorEl);
+});
+
+signOutBtn.addEventListener('click', async () => {
+  await supabase.auth.signOut();
+  await refreshAuthUi();
+});
+
+async function refreshAuthUi() {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session) {
+    hide(loginSection);
+    show(appSection);
+    show(signOutBtn);
+  } else {
+    show(loginSection);
+    hide(appSection);
+    hide(signOutBtn);
+  }
+}
+
+// ---- Tabs ----
+
+document.querySelectorAll('.tabs button').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tabs button').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    ['account', 'bracelet', 'log'].forEach((name) => {
+      const panel = document.getElementById('tab-' + name);
+      if (name === btn.dataset.tab) show(panel); else hide(panel);
+    });
+    if (btn.dataset.tab === 'log') loadLog();
+  });
+});
+
+// ---- Query account ----
+
+document.getElementById('accountSearchBtn').addEventListener('click', async () => {
+  const email = document.getElementById('accountEmailInput').value.trim();
+  const errorEl = document.getElementById('accountError');
+  const resultEl = document.getElementById('accountResult');
+  hide(errorEl);
+  resultEl.innerHTML = '';
+  if (!email) return;
+  try {
+    const data = await callAdminFunction('admin-query-account', { email });
+    let html = '<p><strong>帳號建立時間：</strong>' + fmtTime(data.created_at) + '</p>';
+    if (!data.bracelets.length) {
+      html += '<p class="muted">尚未綁定任何手環。</p>';
+    } else {
+      html += '<table><tr><th>兌換碼</th><th>款式</th><th>類型</th><th>狀態</th><th>編號</th><th>綁定時間</th></tr>';
+      for (const b of data.bracelets) {
+        html += '<tr><td>' + escapeHtml(b.code) + '</td><td>' + escapeHtml(b.label) + '</td><td>' +
+          escapeHtml(b.chart_type) + '</td><td>' + escapeHtml(b.status) + '</td><td>' +
+          escapeHtml(b.holder_number) + '</td><td>' + fmtTime(b.redeemed_at) + '</td></tr>';
+      }
+      html += '</table>';
+    }
+    resultEl.innerHTML = html;
+  } catch (e) {
+    errorEl.textContent = e.message;
+    show(errorEl);
+  }
+});
+
+// ---- Query bracelet ----
+
+document.getElementById('braceletSearchBtn').addEventListener('click', async () => {
+  const code = document.getElementById('braceletCodeInput').value.trim();
+  const errorEl = document.getElementById('braceletError');
+  const resultEl = document.getElementById('braceletResult');
+  hide(errorEl);
+  resultEl.innerHTML = '';
+  if (!code) return;
+  try {
+    const b = await callAdminFunction('admin-query-bracelet', { code });
+    resultEl.innerHTML =
+      '<table>' +
+      '<tr><th>兌換碼</th><td>' + escapeHtml(b.code) + '</td></tr>' +
+      '<tr><th>款式</th><td>' + escapeHtml(b.label) + '（' + escapeHtml(b.chart_type) + '）</td></tr>' +
+      '<tr><th>狀態</th><td>' + escapeHtml(b.status) + '</td></tr>' +
+      '<tr><th>持有編號</th><td>' + escapeHtml(b.holder_number) + '</td></tr>' +
+      '<tr><th>建立時間</th><td>' + fmtTime(b.created_at) + '</td></tr>' +
+      '<tr><th>綁定時間</th><td>' + fmtTime(b.redeemed_at) + '</td></tr>' +
+      '<tr><th>綁定者</th><td>' + (b.redeemed_by_email ? escapeHtml(b.redeemed_by_email) : '<span class="muted">' + (b.redeemed_by ? '帳號已刪除' : '尚未綁定') + '</span>') + '</td></tr>' +
+      '</table>';
+  } catch (e) {
+    errorEl.textContent = e.message;
+    show(errorEl);
+  }
+});
+
+// ---- Log ----
+
+async function loadLog() {
+  const resultEl = document.getElementById('logResult');
+  resultEl.innerHTML = '載入中…';
+  try {
+    const data = await callAdminFunction('admin-list-audit-log', { limit: 100 });
+    if (!data.entries.length) {
+      resultEl.innerHTML = '<p class="muted">尚無紀錄。</p>';
+      return;
+    }
+    let html = '<table><tr><th>時間</th><th>人員</th><th>動作</th><th>對象</th></tr>';
+    for (const e of data.entries) {
+      html += '<tr><td>' + fmtTime(e.created_at) + '</td><td>' + escapeHtml(e.admin_label) +
+        '</td><td>' + escapeHtml(e.action) + '</td><td>' + escapeHtml(e.target) + '</td></tr>';
+    }
+    html += '</table>';
+    resultEl.innerHTML = html;
+  } catch (e) {
+    resultEl.innerHTML = '<p class="error">' + escapeHtml(e.message) + '</p>';
+  }
+}
+
+refreshAuthUi();
+</script>
+</body>
+</html>
