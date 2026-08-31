@@ -300,6 +300,8 @@ document.getElementById('accountSearchBtn').addEventListener('click', async () =
 
 // ---- Query bracelet ----
 
+let lastBraceletResult = null;
+
 document.getElementById('braceletSearchBtn').addEventListener('click', async () => {
   const code = document.getElementById('braceletCodeInput').value.trim();
   const errorEl = document.getElementById('braceletError');
@@ -309,21 +311,63 @@ document.getElementById('braceletSearchBtn').addEventListener('click', async () 
   if (!code) return;
   try {
     const b = await callAdminFunction('admin-query-bracelet', { code });
-    resultEl.innerHTML =
-      '<table>' +
-      '<tr><th>兌換碼</th><td>' + escapeHtml(b.code) + '</td></tr>' +
-      '<tr><th>款式</th><td>' + escapeHtml(b.label) + '（' + escapeHtml(b.chart_type) + '）</td></tr>' +
-      '<tr><th>狀態</th><td>' + escapeHtml(b.status) + '</td></tr>' +
-      '<tr><th>持有編號</th><td>' + escapeHtml(b.holder_number) + '</td></tr>' +
-      '<tr><th>建立時間</th><td>' + fmtTime(b.created_at) + '</td></tr>' +
-      '<tr><th>綁定時間</th><td>' + fmtTime(b.redeemed_at) + '</td></tr>' +
-      '<tr><th>綁定者</th><td>' + (b.redeemed_by_email ? escapeHtml(b.redeemed_by_email) : '<span class="muted">' + (b.redeemed_by ? '帳號已刪除' : '尚未綁定') + '</span>') + '</td></tr>' +
-      '</table>';
+    lastBraceletResult = b;
+    renderBraceletResult(b);
   } catch (e) {
     errorEl.textContent = e.message;
     show(errorEl);
   }
 });
+
+function renderBraceletResult(b) {
+  const resultEl = document.getElementById('braceletResult');
+  let html =
+    '<table>' +
+    '<tr><th>兌換碼</th><td>' + escapeHtml(b.code) + '</td></tr>' +
+    '<tr><th>款式</th><td>' + escapeHtml(b.label) + '（' + escapeHtml(b.chart_type) + '）</td></tr>' +
+    '<tr><th>狀態</th><td>' + escapeHtml(b.status) + '</td></tr>' +
+    '<tr><th>持有編號</th><td>' + escapeHtml(b.holder_number) + '</td></tr>' +
+    '<tr><th>建立時間</th><td>' + fmtTime(b.created_at) + '</td></tr>' +
+    '<tr><th>綁定時間</th><td>' + fmtTime(b.redeemed_at) + '</td></tr>' +
+    '<tr><th>綁定者</th><td>' + (b.redeemed_by_email ? escapeHtml(b.redeemed_by_email) : '<span class="muted">' + (b.redeemed_by ? '帳號已刪除' : '尚未綁定') + '</span>') + '</td></tr>' +
+    '</table>';
+  // Only offered when there's actually a binding (or a void) to undo --
+  // 'unactivated' has nothing to release. Releasing clears redeemed_by/
+  // redeemed_at server-side (see admin_release_redeem_code's migration) so
+  // it doesn't linger on the old holder's account -- this isn't just a
+  // status label flip.
+  if (b.status !== 'unactivated') {
+    html +=
+      '<p style="margin-top:16px"><button class="primary" id="releaseBtn" style="background:#b3423b">釋出（解除綁定）</button></p>';
+  }
+  resultEl.innerHTML = html;
+  const releaseBtn = document.getElementById('releaseBtn');
+  if (releaseBtn) releaseBtn.addEventListener('click', releaseBracelet);
+}
+
+async function releaseBracelet() {
+  const errorEl = document.getElementById('braceletError');
+  hide(errorEl);
+  if (!lastBraceletResult) return;
+  const code = lastBraceletResult.code;
+  if (!confirm('確定要釋出「' + code + '」這個兌換碼嗎？目前的綁定會被解除，之後任何人都可以重新兌換這個碼。')) {
+    return;
+  }
+  const reason = prompt('請輸入釋出原因（會記錄在稽核紀錄裡）：');
+  if (!reason || !reason.trim()) {
+    errorEl.textContent = '沒有輸入原因，已取消。';
+    show(errorEl);
+    return;
+  }
+  try {
+    const updated = await callAdminFunction('admin-release-bracelet', { code, reason: reason.trim() });
+    lastBraceletResult = updated;
+    renderBraceletResult(updated);
+  } catch (e) {
+    errorEl.textContent = e.message;
+    show(errorEl);
+  }
+}
 
 // ---- Log ----
 
