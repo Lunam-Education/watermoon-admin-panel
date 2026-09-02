@@ -83,12 +83,18 @@
 
   <section id="appSection" class="hidden">
     <div class="tabs">
-      <button data-tab="account" class="active">查詢帳號</button>
+      <button data-tab="stats" class="active">總覽</button>
+      <button data-tab="account">查詢帳號</button>
       <button data-tab="bracelet">查詢手環</button>
       <button data-tab="log">操作紀錄</button>
     </div>
 
-    <div id="tab-account" class="card">
+    <div id="tab-stats" class="card">
+      <div id="statsError" class="error hidden"></div>
+      <div id="statsResult">載入中…</div>
+    </div>
+
+    <div id="tab-account" class="card hidden">
       <div class="search-row">
         <input id="accountEmailInput" type="email" placeholder="使用者 email">
         <button class="primary" id="accountSearchBtn">查詢</button>
@@ -160,17 +166,19 @@ function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-async function callAdminFunction(name, body) {
+async function callAdminFunction(name, body, method = 'POST') {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error('尚未登入');
   const res = await fetch(SUPABASE_URL + '/functions/v1/' + name, {
-    method: 'POST',
+    method,
     headers: {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer ' + session.access_token,
       'apiKey': SUPABASE_PUBLISHABLE_KEY,
     },
-    body: JSON.stringify(body ?? {}),
+    // GET requests carry no body -- admin-stats is the only GET endpoint
+    // among these, everything else is POST with a JSON body.
+    ...(method === 'GET' ? {} : { body: JSON.stringify(body ?? {}) }),
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -247,6 +255,7 @@ async function refreshAuthUi() {
     hide(loginSection);
     show(appSection);
     show(signOutBtn);
+    loadStats(); // 總覽是預設分頁，登入當下就先載入，不用等使用者點一次
   } else {
     show(loginSection);
     hide(appSection);
@@ -260,13 +269,57 @@ document.querySelectorAll('.tabs button').forEach((btn) => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.tabs button').forEach((b) => b.classList.remove('active'));
     btn.classList.add('active');
-    ['account', 'bracelet', 'log'].forEach((name) => {
+    ['stats', 'account', 'bracelet', 'log'].forEach((name) => {
       const panel = document.getElementById('tab-' + name);
       if (name === btn.dataset.tab) show(panel); else hide(panel);
     });
     if (btn.dataset.tab === 'log') loadLog();
+    if (btn.dataset.tab === 'stats') loadStats();
   });
 });
+
+// ---- Overview / stats ----
+
+async function loadStats() {
+  const errorEl = document.getElementById('statsError');
+  const resultEl = document.getElementById('statsResult');
+  hide(errorEl);
+  resultEl.innerHTML = '載入中…';
+  try {
+    const data = await callAdminFunction('admin-stats', null, 'GET');
+
+    const stat = (label, value) =>
+      '<div style="padding:10px 0;border-bottom:1px solid #eee">' +
+      '<div class="muted" style="font-size:13px">' + label + '</div>' +
+      '<div style="font-size:24px;font-weight:600">' + escapeHtml(value) + '</div></div>';
+
+    let html =
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 24px">' +
+      stat('總使用者人數', data.total_users) +
+      stat('近 7 天新增配對', data.bound_last_7d) +
+      stat('總兌換碼數', data.total_codes) +
+      stat('已配對兌換碼數', data.bound_codes) +
+      stat('作廢兌換碼數', data.void_codes) +
+      stat('後台操作次數', data.admin_actions_total) +
+      stat('總測試兌換碼數', data.total_test_codes) +
+      stat('已配對測試兌換碼數', data.bound_test_codes) +
+      '</div>';
+
+    html += '<h3 style="margin-top:20px;font-size:14px;color:#57524b">各款式配對狀況</h3>';
+    html += '<table><tr><th>款式</th><th>類型</th><th>已配對</th><th>總數</th></tr>';
+    for (const s of data.styles) {
+      html += '<tr><td>' + escapeHtml(s.label) + '</td><td>' + escapeHtml(s.chart_type) +
+        '</td><td>' + escapeHtml(s.bound_codes) + '</td><td>' + escapeHtml(s.total_codes) + '</td></tr>';
+    }
+    html += '</table>';
+
+    resultEl.innerHTML = html;
+  } catch (e) {
+    resultEl.innerHTML = '';
+    errorEl.textContent = e.message;
+    show(errorEl);
+  }
+}
 
 // ---- Query account ----
 
